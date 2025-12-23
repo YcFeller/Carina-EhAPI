@@ -1,0 +1,26 @@
+{
+    "name": "ycfeller/carina",
+    "description": "Carina - A lightweight, high-performance E-Hentai API proxy and image processing middleware based on PHP & SQLite.",
+    "type": "project",
+    "require": {
+        "php": "^7.4 || ^8.0",
+        "guzzlehttp/guzzle": "^7.8",
+        "ext-pdo": "*",
+        "ext-pdo_sqlite": "*",
+        "ext-json": "*",
+        "ext-dom": "*",
+        "ext-libxml": "*"
+    },
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "User",
+            "email": "user@example.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "EHAPI\\": "src/"
+        }
+    }
+}
