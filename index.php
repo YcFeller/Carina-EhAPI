@@ -36,6 +36,9 @@ require_once __DIR__ . '/src/Logger.php';
 $logger = new Logger(__DIR__ . '/logs');
 $startTime = microtime(true);
 
+// 防止大画廊抓取超时
+set_time_limit(600);
+
 try {
     // 确保数据目录存在
     $dbDir = dirname($config['db']['path']);

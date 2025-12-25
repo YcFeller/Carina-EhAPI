@@ -153,9 +153,10 @@ class EHService {
                 $images = $this->fetchMpvImages($data['mpv_url']);
             }
             
-            // 策略2 (Fallback): 如果 MPV 失败或未找到，尝试解析当前页面的 gdt
-            if (empty($images)) {
-                $images = $this->scrapeGalleryImages($html, $gid);
+            // 策略2 (Fallback): 如果 MPV 失败、未找到，或者解析出的数量少于期望，逐页抓取
+            $expectedCount = $data['total_images'] ?? 0;
+            if (empty($images) || ($expectedCount > 0 && count($images) < $expectedCount)) {
+                $images = $this->scrapeAllGalleryImages($html, $gid, $token, $data['total_pages'] ?? 1);
             }
 
             if (!empty($images)) {
@@ -170,7 +171,52 @@ class EHService {
         return $data;
     }
 
-    private function scrapeGalleryImages(string $html, int $gid): array {
+    /**
+     * 逐页抓取所有图片
+     */
+    private function scrapeAllGalleryImages(string $firstPageHtml, int $gid, string $token, int $totalPages): array {
+        $allImages = [];
+        $currentCount = 0;
+
+        // 解析第一页
+        $firstPageImages = $this->scrapeGalleryImages($firstPageHtml, $gid, 1);
+        $allImages = array_merge($allImages, $firstPageImages);
+        $currentCount += count($firstPageImages);
+
+        // 如果只有一页，直接返回
+        if ($totalPages <= 1) {
+            return $allImages;
+        }
+
+        // 循环获取后续页面（p 从 0 开始，第一页 p=0 已获取）
+        for ($p = 1; $p < $totalPages; $p++) {
+            // 简单防封策略
+            usleep(100000); // 100ms
+
+            $url = "/g/{$gid}/{$token}/?inline_set=ts_l&p={$p}";
+            try {
+                $response = $this->client->get($url);
+                $html = (string)$response->getBody();
+                
+                // 起始序号累加，保证 page 连续
+                $pageImages = $this->scrapeGalleryImages($html, $gid, $currentCount + 1);
+                if (empty($pageImages)) {
+                    continue;
+                }
+                $allImages = array_merge($allImages, $pageImages);
+                $currentCount += count($pageImages);
+            } catch (\Exception $e) {
+                // 忽略单页错误
+            }
+        }
+
+        return $allImages;
+    }
+
+    /**
+     * 解析当前页面的缩略图列表
+     */
+    private function scrapeGalleryImages(string $html, int $gid, int $startImageNumber = 1): array {
         $dom = new DOMDocument();
         // Fix encoding: force UTF-8
         @$dom->loadHTML('<?xml encoding="UTF-8">' . $html);
@@ -198,7 +244,7 @@ class EHService {
         }
 
         foreach ($tempNodes as $index => $node) {
-            $page = $index + 1;
+            $page = $startImageNumber + $index;
             
             // 如果是 div 容器，需要找内部的 a 标签
             if ($node->nodeName === 'div') {
@@ -734,6 +780,9 @@ class EHService {
         return htmlspecialchars($debug);
     }
 
+    /**
+     * 解析画廊详情页信息
+     */
     private function parseGalleryDetail(string $html, int $gid, string $token): array {
         $dom = new DOMDocument();
         // Fix encoding: force UTF-8
@@ -790,6 +839,36 @@ class EHService {
             $tags[$namespace] = $t;
         }
         $data['tags'] = $tags;
+
+        // 解析详细信息 (gdd) 以获取总图片数量 Length
+        $info = [];
+        $gddRows = $xpath->query('//*[@id="gdd"]//tr');
+        foreach ($gddRows as $row) {
+            $labelNode = $xpath->query('.//td[@class="gdt1"]', $row)->item(0);
+            $valueNode = $xpath->query('.//td[@class="gdt2"]', $row)->item(0);
+            if ($labelNode && $valueNode) {
+                $label = trim($labelNode->textContent);
+                $value = trim($valueNode->textContent);
+                $info[rtrim($label, ':')] = $value;
+            }
+        }
+        if (isset($info['Length'])) {
+            if (preg_match('/(\d+)/', $info['Length'], $m)) {
+                $data['total_images'] = (int)$m[1];
+            }
+        }
+
+        // 解析分页导航，获取总页数
+        $pttLinks = $xpath->query('//table[@class="ptt"]//td/a');
+        $maxPage = 1;
+        foreach ($pttLinks as $link) {
+            $txt = $link->textContent;
+            if (is_numeric($txt)) {
+                $p = (int)$txt;
+                if ($p > $maxPage) $maxPage = $p;
+            }
+        }
+        $data['total_pages'] = $maxPage;
 
         // 图片预览 (获取前几页)
         // 获取所有图片链接需要遍历或使用 API
